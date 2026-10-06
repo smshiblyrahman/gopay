@@ -1,0 +1,97 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gopay-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: gopay
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gopay"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gopay-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: gopay-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gopay-api
+    restart: always
+    command: ["/app/bin/api"]
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://postgres:postgrespassword@postgres:5432/gopay?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      JWT_SECRET: "super-secret-gopay-production-key"
+      REQUIRE_AUTH: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gopay-worker
+    restart: always
+    command: ["/app/bin/worker"]
+    environment:
+      DATABASE_URL: "postgres://postgres:postgrespassword@postgres:5432/gopay?sslmode=disable"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      WEBHOOK_SECRET: "gopay-webhook-hmac-sha256-secret"
+      WEBHOOK_TARGET_URL: "http://api:8080/mock-webhook"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  rabbitdata:
